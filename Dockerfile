@@ -1,45 +1,29 @@
-# Multi-stage build for optimized image size
-
-# Stage 1: Build stage
-FROM maven:3.8.8-eclipse-temurin-11 AS build
-
+# Build stage
+FROM maven:3.8.6-openjdk-11 AS build
 WORKDIR /app
-
-# Copy pom.xml and download dependencies (cached layer)
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
-
-# Copy source code and build
 COPY src ./src
-RUN mvn clean package -DskipTests -B
+ARG BUILD_PROFILE=dev
+RUN mvn clean package -DskipTests -P${BUILD_PROFILE}
 
-# Stage 2: Runtime stage
-FROM eclipse-temurin:11-jre-jammy
-
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
+# Runtime stage
+FROM openjdk:11-jre-slim
 WORKDIR /app
 
+# Create non-root user
+RUN addgroup --system spring && adduser --system --ingroup spring spring
+USER spring:spring
+
 # Copy jar from build stage
-COPY --from=build /app/target/talentix-platform.jar app.jar
+COPY --from=build --chown=spring:spring /app/target/*.jar app.jar
 
-# Create logs directory
-RUN mkdir -p /var/log/talentix-platform && \
-    chown -R appuser:appuser /app /var/log/talentix-platform
-
-# Switch to non-root user
-USER appuser
-
-# Expose port (will be overridden by profile)
-EXPOSE 8080 8081
+# Copy configuration
+COPY --chown=spring:spring src/main/resources/application*.yml ./config/
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${SERVER_PORT:-8080}/actuator/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:8080/actuator/health || exit 1
 
-# Set JVM options for containerized environment
-ENV JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
-
-# Run application
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
