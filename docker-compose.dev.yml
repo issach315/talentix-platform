@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: talentix-mysql-dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-talentix_dev}
+      MYSQL_USER: ${MYSQL_USER:-talentix}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-talentix123}
+    ports:
+      - "0.0.0.0:3307:3306"  # Accessible from host and network
+    expose:
+      - "3306"  # Exposed to other containers
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/init-dev.sql:/docker-entrypoint-initdb.d/init.sql  # Optional
+    networks:
+      - talentix-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command:
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --max_allowed_packet=64M
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_PROFILE: dev
+    image: talentix-platform:dev
+    container_name: talentix-app-dev
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-talentix_dev}
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "true"
+      SERVER_PORT: 8081
+      SERVER_SERVLET_CONTEXT_PATH: /
+      JAVA_OPTS: "-Xms256m -Xmx512m -XX:+UseG1GC"
+    ports:
+      - "0.0.0.0:8081:8081"  # Accessible from host and network
+    expose:
+      - "8081"  # Exposed to other containers
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - talentix-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - ./logs:/var/log/talentix-platform  # Map logs to host
+      - ./application-dev.yml:/app/config/application-dev.yml:ro  # Config volume
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  phpmyadmin:  # Optional: for database management
+    image: phpmyadmin/phpmyadmin
+    container_name: talentix-phpmyadmin-dev
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 1
+    ports:
+      - "0.0.0.0:8082:80"
+    depends_on:
+      - mysql
+    networks:
+      - talentix-network
+
+volumes:
+  mysql_data:
+    name: talentix_mysql_data_dev
+    driver: local
+
+networks:
+  talentix-network:
+    name: talentix-network-dev
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
